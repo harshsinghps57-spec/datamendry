@@ -10,8 +10,16 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.9
+      - key: DATAMENDRY_DEMO_ONLY
+        value: "1"
       - key: DATAMENDRY_MAX_UPLOAD_MB
-        value: "20"
+        value: "8"
+      - key: DATAMENDRY_MAX_ROWS
+        value: "100000"
+      - key: DATAMENDRY_MAX_DB_MB
+        value: "64"
+      - key: DATAMENDRY_MAX_DATASETS
+        value: "40"
       - key: DATAMENDRY_DATA_DIR
         value: /tmp/datamendry-data
       - key: DATAMENDRY_TTL_HOURS

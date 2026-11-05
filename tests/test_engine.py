@@ -48,10 +48,10 @@ def test_csv_formula_injection_defense(tmp_path):
     db, meta = load(tmp_path, 'name,formula\nme,=CMD(1)\nyou," +SUM(2,2)"\n')
     output = b''.join(export_csv_chunks(db, meta['columns'], RepairOptions())).decode('utf-8-sig')
     values = list(csv.reader(io.StringIO(output)))
-    assert values[1][1] == "'=CMD(1)"
-    assert values[2][1].startswith("' ")
+    assert values[1][1] == "\t=CMD(1)"
+    assert values[2][1].startswith("\t ")
     assert safe_csv_cell('regular') == 'regular'
-    assert safe_csv_cell('-45') == "'-45"  # conservative: negative numbers are text in this version
+    assert safe_csv_cell('-45') == "\t-45"  # conservative: negative numbers are text in this version
 
 
 def test_invalid_headers(tmp_path):

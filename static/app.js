@@ -1,6 +1,6 @@
 'use strict';
 const byId = id => document.getElementById(id);
-const state = { id: null, profile: null, fileName: '', offset: 0, impact: null, simulatedRecipe: null, isBusy: false };
+const state = { demoOnly: true, maxUploadMb: 0, id: null, profile: null, fileName: '', offset: 0, impact: null, simulatedRecipe: null, isBusy: false };
 const pageLabels = { overview: 'Overview', quality: 'Quality explorer', repair: 'Repair studio', rules: 'Rule checker' };
 const number = n => Number(n).toLocaleString();
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -56,8 +56,9 @@ function renderDataset(profile) {
 }
 async function uploadFile(file) {
   if (!file) return;
+  if (state.demoOnly) return notice('For everyone’s safety this public beta allows only the built-in sample dataset. Run DataMendry locally for your own files.');
   if (!file.name.toLowerCase().endsWith('.csv')) return notice('Choose a UTF-8 CSV file. Other formats are not supported in this build.');
-  if (file.size > 200 * 1024 * 1024) return notice('File exceeds the default 200 MiB upload limit.');
+  if (file.size > state.maxUploadMb * 1024 * 1024) return notice(`File exceeds the ${state.maxUploadMb} MiB upload limit.`);
   if (state.isBusy) return;
   clearNotice(); busy(true, 'Streaming your file into the data-quality engine…');
   try {
@@ -95,7 +96,7 @@ async function downloadCSV() {
 }
 function downloadAudit() {
   if (!state.id || !state.impact) return;
-  const audit = { tool: 'DataMendry', version: '0.2.0', generated_at: new Date().toISOString(), source_sha256: state.profile.source_sha256, original_filename: state.profile.filename, simulation: state.impact, important: 'Do not assume transformations are always appropriate for your domain.' };
+  const audit = { tool: 'DataMendry', version: '0.3.0', generated_at: new Date().toISOString(), source_sha256: state.profile.source_sha256, original_filename: state.profile.filename, simulation: state.impact, important: 'Do not assume transformations are always appropriate for your domain.' };
   downloadBlob(new Blob([JSON.stringify(audit, null, 2)], { type: 'application/json' }), 'datamendry-audit.json');
 }
 async function runRule() {
@@ -114,11 +115,57 @@ async function removeDataset() {
   if (!state.id || !window.confirm('Delete this dataset from the server? This cannot be undone.')) return;
   try { await api(`/api/datasets/${state.id}`, { method: 'DELETE' }); state.id = null; state.profile = null; state.impact = null; state.simulatedRecipe = null; byId('dataset-results').hidden = true; document.querySelectorAll('.requires-data').forEach(node => node.hidden = true); document.querySelectorAll('[data-empty]').forEach(node => node.hidden = false); showPage('overview'); notice('Dataset deleted from the server.', true); } catch (e) { notice(e.message); }
 }
+async function configureDemoMode() {
+  try {
+    const config = await api('/api/config');
+    state.demoOnly = Boolean(config.demo_only);
+    state.maxUploadMb = Number(config.max_upload_mb) || 0;
+    const input = byId('file-input');
+    const uploadButton = document.querySelector('label[for="file-input"]');
+    const title = document.querySelector('.upload-title');
+    const description = byId('upload-zone').querySelector('p');
+    const footer = document.querySelector('.upload-foot');
+    if (state.demoOnly) {
+      input.disabled = true;
+      uploadButton.hidden = true;
+      title.textContent = 'Explore DataMendry with sample data';
+      description.textContent = 'Real file uploads are disabled on the public beta until private workspaces are ready.';
+      footer.textContent = 'Sample data only · No account needed · Temporary workspaces';
+    } else {
+      input.disabled = false;
+      uploadButton.hidden = false;
+      footer.textContent = `Local mode · UTF-8 CSV up to ${config.max_upload_mb} MiB · Data stored temporarily`;
+    }
+  } catch (e) {
+    byId('file-input').disabled = true;
+    document.querySelector('label[for="file-input"]').hidden = true;
+    notice('Could not verify upload safety settings. Please refresh the page.');
+  }
+}
+
 function bind() {
+  byId('file-input').disabled = true;
+  document.querySelector('label[for="file-input"]').hidden = true;
+  configureDemoMode();
+  const footer = document.querySelector('footer');
+  if (footer) footer.textContent = 'DataMendry v0.3 · Public beta · Never upload sensitive data to a public demo';
+  const label = document.querySelector('.status-dot');
+  if (label) label.lastChild.textContent = ' Local engine · v0.3';
   document.querySelectorAll('.nav-link').forEach(b => b.addEventListener('click', () => showPage(b.dataset.page)));
   byId('file-input').addEventListener('change', e => uploadFile(e.target.files?.[0]));
-  byId('demo-button').addEventListener('click', async () => { try { const r = await api('/api/demo.csv'); const blob = await r.blob(); await uploadFile(new File([blob], 'sample-sales.csv', { type: 'text/csv' })); } catch (e) { notice(e.message); } });
-  const zone = byId('upload-zone'); zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); }); zone.addEventListener('dragleave', () => zone.classList.remove('drag')); zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag'); uploadFile(e.dataTransfer.files?.[0]); });
+  byId('demo-button').addEventListener('click', async () => {
+    if (state.isBusy) return;
+    busy(true, 'Loading the safe sample dataset…'); clearNotice();
+    try {
+      const result = await api('/api/datasets/demo', { method: 'POST' });
+      const oldId = state.id;
+      state.id = result.dataset_id;
+      renderDataset(result.profile);
+      if (oldId) api(`/api/datasets/${oldId}`, { method: 'DELETE' }).catch(() => {});
+      notice('Sample dataset loaded. Explore quality checks, repair impact and rules.', true);
+    } catch(e) { notice(e.message); } finally { busy(false); }
+  });
+  const zone = byId('upload-zone'); zone.addEventListener('dragover', e => { e.preventDefault(); if (!state.demoOnly) zone.classList.add('drag'); }); zone.addEventListener('dragleave', () => zone.classList.remove('drag')); zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag'); uploadFile(e.dataTransfer.files?.[0]); });
   byId('prev-page').addEventListener('click', () => { state.offset = Math.max(0, state.offset - 25); loadPreview().catch(e => notice(e.message)); });
   byId('next-page').addEventListener('click', () => { state.offset += 25; loadPreview().catch(e => notice(e.message)); });
   byId('remove-button').addEventListener('click', removeDataset);

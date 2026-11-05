@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -62,12 +63,18 @@ def make_connection(db_path: Path) -> sqlite3.Connection:
     return con
 
 
-def import_csv(source_path: Path, db_path: Path) -> dict:
+def import_csv(source_path: Path, db_path: Path, *, max_rows: int = 2_000_000,
+               max_seconds: int = 120, max_db_bytes: int = 256 * 1024 * 1024) -> dict:
     """Ingests linearly using batched INSERT and a disk-backed duplicate index."""
     if db_path.exists():
         raise DatasetError("Dataset already exists")
     csv.field_size_limit(MAX_FIELD_CHARACTERS)
+    started = time.monotonic()
     con = make_connection(db_path)
+    # Limit the maximum size of a dataset's SQLite database, not just the CSV.
+    page_size = con.execute("PRAGMA page_size").fetchone()[0]
+    max_pages = max(100, max_db_bytes // page_size)
+    con.execute(f"PRAGMA max_page_count={max_pages}")
     try:
         with source_path.open("r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.reader(fh, strict=True)
@@ -100,6 +107,10 @@ def import_csv(source_path: Path, db_path: Path) -> dict:
                 digests.clear()
 
             for line_number, row in enumerate(reader, start=2):
+                if count >= max_rows:
+                    raise DatasetError(f"Row limit exceeded ({max_rows:,} rows)")
+                if count % BATCH_SIZE == 0 and time.monotonic() - started > max_seconds:
+                    raise DatasetError("Import exceeded its processing time limit")
                 if len(row) != len(headers):
                     raise DatasetError(f"Row {line_number}: expected {len(headers)} cells, found {len(row)}")
                 if any(len(value) > MAX_FIELD_CHARACTERS for value in row):
@@ -118,7 +129,7 @@ def import_csv(source_path: Path, db_path: Path) -> dict:
             return {"columns": headers, "rows": count, "duplicate_rows": duplicates,
                     "missing_cells": sum(blank_counts), "missing_by_column": blank_counts}
     except (csv.Error, UnicodeError, sqlite3.Error) as exc:
-        raise DatasetError(f"Could not import CSV: {exc}") from exc
+        raise DatasetError("Could not import CSV: invalid format or processing limit exceeded") from exc
     finally:
         con.close()
         # Failed import must not leave an inaccessible, half-written dataset.
@@ -214,8 +225,12 @@ def safe_csv_cell(value: str | None) -> str:
     if value is None:
         return ""
     # Leading spaces are significant to spreadsheet formula detection; quote proactively.
-    if re.match(r"^\s*[=+@\-\t\r]", value) and value.strip():
-        return "'" + value
+    # Spreadsheet-oriented protection (OWASP): leading TAB inside quoted CSV
+    # field prevents spreadsheet interpretation as a formula. The prefix alters
+    # the value, so exports are explicitly for spreadsheet-safe use.
+    text = value.lstrip(" \t\r\n\ufeff")
+    if text and (text[0] in "=+-@\uff1d\uff0b\uff0d\uff20" or value.startswith(("\t", "\r", "\n"))):
+        return "\t" + value
     return value
 
 
@@ -224,7 +239,7 @@ def export_csv_chunks(db_path: Path, headers: list[str], options: RepairOptions)
     from contextlib import nullcontext
     con = make_connection(db_path)
     buf = io.StringIO(newline="")
-    writer = csv.writer(buf, lineterminator="\r\n")
+    writer = csv.writer(buf, lineterminator="\r\n", quoting=csv.QUOTE_ALL)
     try:
         with (_seen_database() if options.remove_exact_duplicates else nullcontext(None)) as seen:
             writer.writerow([safe_csv_cell(col) for col in headers])

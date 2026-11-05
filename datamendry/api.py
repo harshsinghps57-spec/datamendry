@@ -5,19 +5,26 @@ Not a replacement for authenticated multi-tenant production infrastructure.
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import os
 import re
 import secrets
 import shutil
 import time
+import threading
+from contextlib import asynccontextmanager, contextmanager, suppress
+from collections import deque
+from typing import BinaryIO
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, File, HTTPException, Path as ApiPath, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.responses import PlainTextResponse
 
 from datamendry.engine import DatasetError, RepairOptions, export_csv_chunks, fetch_preview, import_csv, make_connection, simulate
 
@@ -30,6 +37,13 @@ class Settings:
     data_dir: Path
     max_upload_bytes: int = 200 * 1024 * 1024
     ttl_hours: int = 24
+    demo_only: bool = False
+    max_rows: int = 2_000_000
+    max_import_seconds: int = 120
+    max_db_bytes: int = 256 * 1024 * 1024
+    max_active_datasets: int = 40
+    max_parallel_jobs: int = 3
+    demo_creates_per_minute: int = 20
 
 
 class Recipe(BaseModel):
@@ -42,13 +56,83 @@ class Recipe(BaseModel):
 
 
 class Rule(BaseModel):
-    column: str = Field(min_length=1)
+    column: str = Field(min_length=1, max_length=200)
     kind: Literal["not_empty", "unique", "numeric", "minimum", "maximum"]
-    threshold: float | None = None
+    threshold: float | None = Field(default=None, allow_inf_nan=False)
 
 
 class RulesRequest(BaseModel):
     rules: list[Rule] = Field(min_length=1, max_length=20)
+
+
+class RequestBodyLimit:
+    """ASGI-level body limit, including requests without Content-Length.
+
+    Rejects anonymous uploads *before* Starlette parses multipart in demo mode.
+    Does not trust client-provided forwarded headers.
+    """
+    def __init__(self, app, *, config: Settings):
+        self.app = app
+        self.config = config
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+        if self.config.demo_only and method == "POST" and path.rstrip("/") == "/api/datasets":
+            await PlainTextResponse("Public demo accepts only the built-in sample dataset", status_code=403)(scope, receive, send)
+            return
+        maximum = (self.config.max_upload_bytes + 128 * 1024) if method == "POST" and path.rstrip("/") == "/api/datasets" else 64 * 1024
+        if method not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        # Browser-origin protection for state-changing requests; not an identity
+        # or anti-bot mechanism. Clients can forge headers, so resource quotas
+        # and demo-only mode remain the primary public controls.
+        host = headers.get(b"host", b"").decode("latin-1").lower()
+        origin = headers.get(b"origin", b"").decode("latin-1").lower()
+        fetch_site = headers.get(b"sec-fetch-site", b"").decode("latin-1").lower()
+        if fetch_site == "cross-site" or (origin and urlsplit(origin).netloc != host):
+            await PlainTextResponse("Cross-site requests are not allowed", status_code=403)(scope, receive, send)
+            return
+        raw = headers.get(b"content-length", b"")
+        try:
+            if raw and int(raw) > maximum:
+                await PlainTextResponse("Request too large", status_code=413)(scope, receive, send)
+                return
+        except ValueError:
+            await PlainTextResponse("Invalid Content-Length", status_code=400)(scope, receive, send)
+            return
+        received = 0
+        response_started = False
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > maximum:
+                    raise BodyTooLarge()
+            return message
+
+        async def track_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, track_send)
+        except BodyTooLarge:
+            if not response_started:
+                await PlainTextResponse("Request too large", status_code=413)(scope, receive, send)
+
+
+class BodyTooLarge(Exception):
+    pass
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -56,9 +140,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data_dir=Path(os.getenv("DATAMENDRY_DATA_DIR", str(PROJECT_DIR / "data"))),
         max_upload_bytes=int(os.getenv("DATAMENDRY_MAX_UPLOAD_MB", "200")) * 1024 * 1024,
         ttl_hours=int(os.getenv("DATAMENDRY_TTL_HOURS", "24")),
+        demo_only=os.getenv("DATAMENDRY_DEMO_ONLY", "1").strip().lower() in {"1", "true", "yes"},
+        max_rows=int(os.getenv("DATAMENDRY_MAX_ROWS", "2000000")),
+        max_db_bytes=int(os.getenv("DATAMENDRY_MAX_DB_MB", "256")) * 1024 * 1024,
+        max_active_datasets=int(os.getenv("DATAMENDRY_MAX_DATASETS", "40")),
     )
-    config.data_dir.mkdir(parents=True, exist_ok=True)
-    app = FastAPI(title="DataMendry API", version="0.2.0", docs_url="/api/docs", redoc_url=None)
+    if config.max_upload_bytes <= 0 or config.max_rows <= 0 or config.max_parallel_jobs <= 0:
+        raise ValueError("Invalid resource limits")
+    config.data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await asyncio.to_thread(remove_expired)
+        async def periodic_cleanup():
+            while True:
+                await asyncio.sleep(180)
+                await asyncio.to_thread(remove_expired)
+        task = asyncio.create_task(periodic_cleanup())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(title="DataMendry API", version="0.3.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+    app.add_middleware(RequestBodyLimit, config=config)
+    jobs = threading.BoundedSemaphore(config.max_parallel_jobs)
+    workspace_lock = threading.Lock()
+    demo_log: deque[float] = deque()
+
+    @contextmanager
+    def job_slot():
+        if not jobs.acquire(blocking=False):
+            raise HTTPException(429, "Server is busy; try again later")
+        try:
+            yield
+        finally:
+            jobs.release()
 
     @app.middleware("http")
     async def add_security_headers(request, call_next):
@@ -67,14 +186,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = (
-    "default-src 'self'; "
-    "script-src 'self' https://static.cloudflareinsights.com/beacon.min.js; "
-    "style-src 'self'; "
-    "img-src 'self' data:; "
-    "connect-src 'self' https://cloudflareinsights.com; "
-    "form-action 'self'; "
-    "base-uri 'none'"
-)
+            "default-src 'self'; "
+            "script-src 'self' https://static.cloudflareinsights.com/beacon.min.js; "
+            "style-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' https://cloudflareinsights.com; "
+            "form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+        )
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -94,7 +213,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.2.0"}
+        return {"status": "ok", "version": "0.3.0"}
+
+    @app.get("/api/config")
+    def public_config():
+        return {"demo_only": config.demo_only,
+                "max_upload_mb": config.max_upload_bytes // (1024 * 1024),
+                "ttl_hours": config.ttl_hours}
 
     def dataset_path(dataset_id: str) -> Path:
         if not DATASET_ID_PATTERN.fullmatch(dataset_id):
@@ -129,50 +254,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if expired:
                 shutil.rmtree(folder, ignore_errors=True)
 
-    @app.post("/api/datasets", status_code=201)
-    def upload_dataset(file: UploadFile = File(...)):
-        if not file.filename or Path(file.filename).suffix.lower() != ".csv":
-            raise HTTPException(415, "This version supports UTF-8 CSV files only")
+    def create_workspace() -> tuple[str, Path]:
+        # Bound number of active workspaces under concurrent requests.
         remove_expired()
-        dataset_id = secrets.token_hex(16)
-        workspace = config.data_dir / dataset_id
-        workspace.mkdir(mode=0o700, parents=True, exist_ok=False)
-        upload_file = workspace / "source.upload"
+        with workspace_lock:
+            active = sum(1 for folder in config.data_dir.iterdir()
+                         if folder.is_dir() and DATASET_ID_PATTERN.fullmatch(folder.name))
+            if active >= config.max_active_datasets:
+                raise HTTPException(429, "Demo capacity reached; try again later")
+            dataset_id = secrets.token_hex(16)
+            workspace = config.data_dir / dataset_id
+            workspace.mkdir(mode=0o700, parents=True, exist_ok=False)
+        return dataset_id, workspace
+
+    def ingest(stream: BinaryIO, filename: str) -> dict:
+        if not filename or not filename.lower().endswith(".csv") or len(filename) > 200:
+            raise HTTPException(415, "Only UTF-8 CSV files are supported")
+        dataset_id, workspace = create_workspace()
+        source = workspace / "source.upload"
         count = 0
         digest = hashlib.sha256()
         try:
-            with upload_file.open("wb") as dest:
-                while chunk := file.file.read(1024 * 1024):
+            with source.open("wb") as dest:
+                while chunk := stream.read(256 * 1024):
                     count += len(chunk)
                     if count > config.max_upload_bytes:
-                        raise HTTPException(413, f"Upload limit is {config.max_upload_bytes // (1024 * 1024)} MiB")
+                        raise HTTPException(413, "Upload size limit exceeded")
+                    if b"\x00" in chunk:
+                        raise HTTPException(422, "Binary files are not supported")
                     digest.update(chunk)
                     dest.write(chunk)
-            if count == 0:
+            if not count:
                 raise HTTPException(422, "The uploaded file is empty")
-            summary = import_csv(upload_file, workspace / "dataset.sqlite")
+            summary = import_csv(source, workspace / "dataset.sqlite",
+                                 max_rows=config.max_rows,
+                                 max_seconds=config.max_import_seconds,
+                                 max_db_bytes=config.max_db_bytes)
+            created = time.time()
             summary.update({
-                "dataset_id": dataset_id,
-                "filename": Path(file.filename.replace("\\", "/")).name[:120],
-                "bytes_uploaded": count,
-                "created_at": time.time(),
-                "expires_at": time.time() + config.ttl_hours * 3600,
+                "dataset_id": dataset_id, "filename": Path(filename.replace("\\", "/")).name[:120],
+                "bytes_uploaded": count, "created_at": created,
+                "expires_at": created + config.ttl_hours * 3600,
                 "source_sha256": digest.hexdigest(),
             })
             (workspace / "metadata.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-            upload_file.unlink(missing_ok=True)
+            source.unlink(missing_ok=True)
             return {"dataset_id": dataset_id, "profile": public_profile(summary)}
-        except HTTPException:
+        except (HTTPException, DatasetError) as error:
             shutil.rmtree(workspace, ignore_errors=True)
+            if isinstance(error, DatasetError):
+                raise HTTPException(422, str(error)) from error
             raise
-        except DatasetError as error:
-            shutil.rmtree(workspace, ignore_errors=True)
-            raise HTTPException(422, str(error)) from error
         except Exception:
             shutil.rmtree(workspace, ignore_errors=True)
             raise
-        finally:
-            file.file.close()
+
+    @app.post("/api/datasets", status_code=201)
+    def upload_dataset(file: UploadFile = File(...)):
+        if config.demo_only:
+            raise HTTPException(403, "Public demo accepts only the built-in sample dataset")
+        with job_slot():
+            try:
+                return ingest(file.file, file.filename or "")
+            finally:
+                file.file.close()
+
+    @app.post("/api/datasets/demo", status_code=201)
+    def create_demo():
+        with job_slot():
+            now = time.monotonic()
+            with workspace_lock:
+                while demo_log and now - demo_log[0] > 60:
+                    demo_log.popleft()
+                if len(demo_log) >= config.demo_creates_per_minute:
+                    raise HTTPException(429, "Too many demo requests; try again later")
+                demo_log.append(now)
+            with (PROJECT_DIR / "examples" / "sample_sales.csv").open("rb") as stream:
+                return ingest(stream, "sample-sales.csv")
 
     def public_profile(meta: dict) -> dict:
         total = meta["rows"] * len(meta["columns"])
@@ -197,19 +355,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/datasets/{dataset_id}/simulate")
     def run_simulation(dataset_id: str, recipe: Recipe):
-        db, meta = get_dataset(dataset_id)
-        return simulate(db, meta, recipe.to_options())
+        with job_slot():
+            db, meta = get_dataset(dataset_id)
+            return simulate(db, meta, recipe.to_options())
 
     @app.get("/api/datasets/{dataset_id}/export.csv")
     def download(dataset_id: str, trim_whitespace: bool = False,
                  normalize_blanks: bool = False, remove_exact_duplicates: bool = False):
         db, meta = get_dataset(dataset_id)
         options = RepairOptions(trim_whitespace, normalize_blanks, remove_exact_duplicates)
-        return StreamingResponse(export_csv_chunks(db, meta["columns"], options), media_type="text/csv; charset=utf-8",
-                                 headers={"Content-Disposition": 'attachment; filename="datamendry-cleaned.csv"'})
+        if not jobs.acquire(blocking=False):
+            raise HTTPException(429, "Server is busy; try again later")
+
+        def limited_export():
+            try:
+                yield from export_csv_chunks(db, meta["columns"], options)
+            finally:
+                jobs.release()
+
+        return StreamingResponse(limited_export(), media_type="text/csv; charset=utf-8",
+                                 headers={"Content-Disposition": 'attachment; filename="datamendry-cleaned.csv"',
+                                          "X-Content-Type-Options": "nosniff"})
 
     @app.post("/api/datasets/{dataset_id}/rules")
     def evaluate_rules(dataset_id: str, request: RulesRequest):
+        with job_slot():
+            return _evaluate_rules(dataset_id, request)
+
+    def _evaluate_rules(dataset_id: str, request: RulesRequest):
         db, meta = get_dataset(dataset_id)
         columns = meta["columns"]
         results = []
@@ -253,9 +426,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.delete("/api/datasets/{dataset_id}")
     def delete_dataset(dataset_id: str):
-        path = dataset_path(dataset_id)
-        shutil.rmtree(path)
-        return {"deleted": True}
+        with job_slot():
+            path = dataset_path(dataset_id)
+            shutil.rmtree(path)
+            return {"deleted": True}
 
     return app
 

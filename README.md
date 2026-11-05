@@ -1,4 +1,13 @@
-# DataMendry — Data Repair Workspace
+## 🌐 Live Website
+
+**Try DataMendry online:**
+https://datamendry-demo.onrender.com/
+
+[🚀 Open DataMendry Live Demo](https://datamendry-demo.onrender.com/)
+
+> Public beta: Use sample or non-sensitive data only.
+
+---# DataMendry — Data Repair Workspace
 
 [![CI](https://img.shields.io/badge/CI-GitHub_Actions-blue)](.github/workflows/tests.yml) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue) ![License](https://img.shields.io/badge/License-MIT-green) ![Stage](https://img.shields.io/badge/Status-public_preview-orange)
 

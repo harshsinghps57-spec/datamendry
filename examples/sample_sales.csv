@@ -1,0 +1,16 @@
+order_id,customer,category,sales,units,city
+1001, Anita,Electronics,2300,2,Pune
+1002,Rahul,Home,500,1,Mumbai
+1003,Neha,Electronics,1250,1,Pune
+1003,Neha,Electronics,1250,1,Pune
+1004, Sagar ,Home,,2,Nashik
+1005,Akash,Office,340,3,Pune
+1006,Riya,Office,410,1,Mumbai
+1007,Neha,Home,600,2,Pune
+1008,Deepa,Electronics,1540,1,Mumbai
+1009,Rahul,Home,560,1,Pune
+1010,Riya,Office,370,2,
+1011,Sagar,Electronics,1290,2,Nashik
+1012,Anita,Home,550,1,Pune
+1013,Akash,Home,610,1,Pune
+1014,Rahul,Electronics,40000,3,Mumbai

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="DataMendry — preview and audit repairs to messy CSV datasets without rewriting your originals." />
+  <title>DataMendry — Data Repair Workspace</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%2351d7c1'/%3E%3Ctext x='50%25' y='70%25' text-anchor='middle' font-family='Arial,sans-serif' font-size='42' font-weight='bold' fill='%230a2130'%3ED%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" aria-label="Main navigation">
+    <a href="/" class="brand" aria-label="DataMendry home"><span class="brand-icon" aria-hidden="true">D<span>·</span></span><span>Data<span class="brand-light">Mendry</span><small>DATA REPAIR STUDIO</small></span></a>
+    <div class="nav-label">WORKSPACE</div>
+    <nav class="nav" aria-label="Workspace sections">
+      <button class="nav-link active" data-page="overview" type="button"><span class="nav-ico">▦</span>Overview</button>
+      <button class="nav-link" data-page="quality" type="button"><span class="nav-ico">◈</span>Quality explorer</button>
+      <button class="nav-link" data-page="repair" type="button"><span class="nav-ico">✳</span>Repair studio</button>
+      <button class="nav-link" data-page="rules" type="button"><span class="nav-ico">☷</span>Rule checker</button>
+    </nav>
+    <div class="sidebar-bottom"><div class="status-dot"><i></i>Local engine · v0.2</div><div class="side-note">No AI keys. No automatic changes. Your original CSV remains untouched.</div><a href="/api/docs" target="_blank" rel="noopener" class="api-link">Explore developer API ↗</a></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div class="crumb">WORKSPACE <span>/</span> <b id="crumb-page">Overview</b></div><div class="top-actions"><span class="pill">BETA BUILD</span><a href="https://github.com" class="external" target="_blank" rel="noopener">Open source ↗</a></div></header>
+    <div class="content">
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+      <section id="page-overview" class="page active">
+        <div class="eyebrow">THE DATA REPAIR WORKSPACE</div>
+        <h1>Good decisions start<br>with <em>good data.</em></h1>
+        <p class="intro">Find what’s broken, preview the impact of each fix, and export a verified repair trail. Never change your source blindly.</p>
+        <div id="upload-zone" class="upload-zone" role="group" aria-label="Upload data">
+          <div class="upload-icon">↑</div><div class="upload-title">Drop your CSV file here</div><p>Or browse your computer to begin profiling your data.</p>
+          <div class="upload-actions"><label for="file-input" class="button primary">Choose CSV file</label><button id="demo-button" class="button secondary" type="button">Try sample dataset</button></div>
+          <input id="file-input" type="file" accept=".csv,text/csv" hidden />
+          <div class="upload-foot">UTF-8 CSV · Up to 200 MiB by default · File stored temporarily on this server</div>
+        </div>
+        <div id="loading" class="loading" hidden><span class="spinner"></span><span id="loading-label">Analyzing your dataset…</span></div>
+        <div id="dataset-results" hidden>
+          <div class="section-heading"><div><div class="eyebrow">CURRENT DATASET</div><h2 id="dataset-name">—</h2><p>Profiled and ready to inspect. All transformations are proposals until exported.</p></div><button id="remove-button" class="button ghost-danger" type="button">Delete uploaded data</button></div>
+          <div class="metrics" id="metric-grid"></div>
+          <div class="two-col"><div class="panel"><div class="panel-head"><h3>Column quality</h3><span class="subtle">Missing cells by field</span></div><div id="column-bars" class="bar-list"></div></div><div class="panel"><div class="panel-head"><h3>Your next steps</h3></div><div class="steps"><div><span>01</span><section><strong>Inspect the quality report</strong><p>Find missing values and duplicate records.</p></section></div><div><span>02</span><section><strong>Simulate a safe repair</strong><p>See changes before exporting your CSV.</p></section></div><div><span>03</span><section><strong>Validate with rules</strong><p>Check column constraints and exceptions.</p></section></div></div></div></div>
+        </div>
+        <div class="features"><article><span>◇</span><h3>Transparent by design</h3><p>Every proposed change can be reviewed before it becomes a download.</p></article><article><span>▤</span><h3>Large-file aware</h3><p>CSV import is streamed into disk-backed storage rather than a giant browser table.</p></article><article><span>♙</span><h3>Control stays with you</h3><p>No automatic imputation, no hidden external AI service, no silent deletion.</p></article></div>
+      </section>
+      <section id="page-quality" class="page"><div class="eyebrow">DIAGNOSE</div><h1 class="page-title">Quality explorer</h1><p class="intro small">A detailed overview of your dataset, without downloading all rows into the browser.</p><div class="empty-state" data-empty>Upload a dataset on Overview first.</div><div class="requires-data" hidden><div class="metrics" id="quality-metrics"></div><div class="panel"><div class="panel-head"><h3>Missing data by column</h3><span class="subtle">Exact counts, not estimates</span></div><div id="quality-columns" class="column-table-wrap"></div></div><div class="panel"><div class="panel-head"><h3>Preview records</h3><div class="pagination"><button id="prev-page" class="button tiny" type="button">← Previous</button><span id="page-number">Page 1</span><button id="next-page" class="button tiny" type="button">Next →</button></div></div><div id="table-container" class="table-scroll"></div><p class="help">Showing at most 25 rows per page. All CSV fields are treated as text to preserve IDs and leading zeros.</p></div></div></section>
+      <section id="page-repair" class="page"><div class="eyebrow">WHAT-IF ANALYSIS</div><h1 class="page-title">Repair studio</h1><p class="intro small">Choose deterministic operations, calculate their exact impact, then export the repaired file and a JSON audit recipe.</p><div class="empty-state" data-empty>Upload a dataset on Overview first.</div><div class="requires-data" hidden><div class="panel"><div class="panel-head"><h3>Proposed transformations</h3><span class="subtle">Original dataset preserved</span></div><div class="switch-list"><label class="switch-row"><span><strong>Trim surrounding whitespace</strong><small>Remove spaces around field values. Does not alter internal whitespace.</small></span><input id="opt-trim" type="checkbox" /></label><label class="switch-row"><span><strong>Normalize blank fields</strong><small>Convert whitespace-only cells to empty values, without inventing values.</small></span><input id="opt-blanks" type="checkbox" /></label><label class="switch-row"><span><strong>Remove identical rows</strong><small>Keep the earliest occurrence after your other transformations.</small></span><input id="opt-dedupe" type="checkbox" /></label></div><button id="simulate-button" class="button primary" type="button">Calculate repair impact →</button></div><div class="panel" id="impact-panel"><div class="panel-head"><h3>Repair impact</h3><span class="subtle">Before vs. after</span></div><div id="impact-empty" class="impact-empty">Choose options and calculate impact to review changes.</div><div id="impact-results" hidden><div id="impact-metrics" class="impact-grid"></div><p id="impact-warning" class="warning" hidden></p><div class="export-actions"><button id="export-csv" class="button primary" type="button">Download cleaned CSV ↓</button><button id="export-json" class="button secondary" type="button">Download audit JSON ↓</button></div><p class="help">Review the report carefully. Data loss from deduplication may be legitimate records.</p></div></div></div></section>
+      <section id="page-rules" class="page"><div class="eyebrow">DATA CONTRACTS</div><h1 class="page-title">Rule checker</h1><p class="intro small">Run transparent, column-level validation. Checks are read-only: failed rules never modify data.</p><div class="empty-state" data-empty>Upload a dataset on Overview first.</div><div class="requires-data" hidden><div class="panel"><div class="panel-head"><h3>Create a data-quality rule</h3></div><div class="rule-form"><label>Column<select id="rule-column"></select></label><label>Check<select id="rule-kind"><option value="not_empty">Must not be empty</option><option value="unique">Values must be unique</option><option value="numeric">Must contain valid numbers</option><option value="minimum">Numeric value at least…</option><option value="maximum">Numeric value at most…</option></select></label><label id="threshold-wrap" hidden>Threshold<input id="rule-threshold" type="number" step="any" placeholder="0" /></label></div><button id="run-rule" class="button primary" type="button">Run validation →</button></div><div class="panel"><div class="panel-head"><h3>Validation results</h3></div><div id="rule-results" class="rules-results"><p class="subtle">No checks run yet.</p></div></div></div></section>
+    </div>
+    <footer>DataMendry v0.2 · Free & open-source · Preview build — not yet audited for sensitive production data</footer>
+  </main>
+</div>
+</body>
+</html>

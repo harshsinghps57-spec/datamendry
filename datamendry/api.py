@@ -67,9 +67,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; "
-            "img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'"
-        )
+    "default-src 'self'; "
+    "script-src 'self' https://static.cloudflareinsights.com/beacon.min.js; "
+    "style-src 'self'; "
+    "img-src 'self' data:; "
+    "connect-src 'self' https://cloudflareinsights.com; "
+    "form-action 'self'; "
+    "base-uri 'none'"
+)
         response.headers["Cache-Control"] = "no-store"
         return response
 

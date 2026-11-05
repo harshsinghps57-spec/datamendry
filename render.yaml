@@ -12,7 +12,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.9
       - key: DATAMENDRY_DEMO_ONLY
-        value: "1"
+        value: "0"
       - key: DATAMENDRY_SECURE_COOKIE
         value: "1"
       - key: DATAMENDRY_MAX_PER_GUEST

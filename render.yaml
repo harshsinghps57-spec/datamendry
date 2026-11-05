@@ -1,4 +1,5 @@
-# Public hobby DEMO ONLY. The filesystem is ephemeral on the free plan.
+# Public hobby DEMO ONLY. Guest sessions exist but public uploads stay disabled.
+# The filesystem is ephemeral on the free plan; do not process sensitive data.
 services:
   - type: web
     name: datamendry-demo
@@ -12,6 +13,12 @@ services:
         value: 3.12.9
       - key: DATAMENDRY_DEMO_ONLY
         value: "1"
+      - key: DATAMENDRY_SECURE_COOKIE
+        value: "1"
+      - key: DATAMENDRY_MAX_PER_GUEST
+        value: "3"
+      - key: DATAMENDRY_UPLOADS_PER_MINUTE
+        value: "8"
       - key: DATAMENDRY_MAX_UPLOAD_MB
         value: "8"
       - key: DATAMENDRY_MAX_ROWS
@@ -19,7 +26,7 @@ services:
       - key: DATAMENDRY_MAX_DB_MB
         value: "64"
       - key: DATAMENDRY_MAX_DATASETS
-        value: "40"
+        value: "12"
       - key: DATAMENDRY_DATA_DIR
         value: /tmp/datamendry-data
       - key: DATAMENDRY_TTL_HOURS

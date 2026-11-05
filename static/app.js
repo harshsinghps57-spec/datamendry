@@ -96,7 +96,7 @@ async function downloadCSV() {
 }
 function downloadAudit() {
   if (!state.id || !state.impact) return;
-  const audit = { tool: 'DataMendry', version: '0.3.0', generated_at: new Date().toISOString(), source_sha256: state.profile.source_sha256, original_filename: state.profile.filename, simulation: state.impact, important: 'Do not assume transformations are always appropriate for your domain.' };
+  const audit = { tool: 'DataMendry', version: '0.4.0', generated_at: new Date().toISOString(), source_sha256: state.profile.source_sha256, original_filename: state.profile.filename, simulation: state.impact, important: 'Do not assume transformations are always appropriate for your domain.' };
   downloadBlob(new Blob([JSON.stringify(audit, null, 2)], { type: 'application/json' }), 'datamendry-audit.json');
 }
 async function runRule() {
@@ -134,7 +134,7 @@ async function configureDemoMode() {
     } else {
       input.disabled = false;
       uploadButton.hidden = false;
-      footer.textContent = `Local mode · UTF-8 CSV up to ${config.max_upload_mb} MiB · Data stored temporarily`;
+      footer.textContent = `Private guest workspace · UTF-8 CSV up to ${config.max_upload_mb} MiB · Data expires after ${config.ttl_hours} hour(s)`;
     }
   } catch (e) {
     byId('file-input').disabled = true;
@@ -148,9 +148,9 @@ function bind() {
   document.querySelector('label[for="file-input"]').hidden = true;
   configureDemoMode();
   const footer = document.querySelector('footer');
-  if (footer) footer.textContent = 'DataMendry v0.3 · Public beta · Never upload sensitive data to a public demo';
+  if (footer) footer.textContent = 'DataMendry v0.4 · Privacy-first guest workspaces · Do not upload sensitive data';
   const label = document.querySelector('.status-dot');
-  if (label) label.lastChild.textContent = ' Local engine · v0.3';
+  if (label) label.lastChild.textContent = ' Local engine · v0.4';
   document.querySelectorAll('.nav-link').forEach(b => b.addEventListener('click', () => showPage(b.dataset.page)));
   byId('file-input').addEventListener('change', e => uploadFile(e.target.files?.[0]));
   byId('demo-button').addEventListener('click', async () => {

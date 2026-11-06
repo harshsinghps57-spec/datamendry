@@ -34,7 +34,9 @@
   }
   let authFlow = 'login';
   function openAuth(flow = 'login') {
-    if (['login','signup','recover'].includes(flow)) authFlow = flow;
+    // Public beta: keep existing email login, but avoid new email signups/recovery without SMTP.
+    authFlow = 'login';
+    $('auth-method').value = 'google';
     setMethod();
     if (!account()?.isAvailable()) {
       showAuthMessage('Cloud login is not configured on this server. Choose Explore as guest for temporary CSV uploads.', true);
@@ -68,7 +70,7 @@
       ? 'Create your account with a password, then verify your email if requested.'
       : authFlow === 'recover'
       ? 'Forgot your password? Use a one-time email code or link to sign in. Then set a new password from Account.'
-      : 'Already registered? Sign in with your password. No email code is needed.';
+      : 'Existing email account? Use your password. New users should select Google.';
     showAuthMessage('');
   }
   async function attempt(fn, success) {
@@ -78,7 +80,7 @@
   $('welcome-signin').addEventListener('click', () => openAuth('login'));
   $('welcome-guest').addEventListener('click', () => { guest = true; enterWorkspace(); });
   $('auth-close').addEventListener('click', closeAuth);
-  ['login','signup','recover'].forEach(flow => $('auth-tab-' + flow).addEventListener('click', () => { authFlow = flow; $('auth-method').value = 'email'; setMethod(); }));
+  $('auth-tab-login').addEventListener('click', () => { authFlow = 'login'; setMethod(); });
   $('auth-method').addEventListener('change', setMethod);
   $('auth-email-method').addEventListener('change', setMethod);
   $('auth-login').addEventListener('click', () => attempt(async () => {

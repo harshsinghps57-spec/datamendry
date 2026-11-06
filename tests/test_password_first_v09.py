@@ -25,8 +25,16 @@ def test_login_dropdown_only_shows_email_and_google():
     js = (ROOT/'static/experience.js').read_text(encoding='utf-8')
     method_html = page.split('<select id="auth-method">', 1)[1].split('</select>', 1)[0]
     assert method_html.count('<option ') == 2
-    assert '<option value="email">Email address</option>' in method_html
-    assert '<option value="google">Google account</option>' in method_html
+    # Google is the default for new public-beta visitors; existing email users can sign in.
+    assert '<option value="google" selected>Google account (new or existing)</option>' in method_html
+    assert '<option value="email">Existing email + password</option>' in method_html
+    assert method_html.index('value="google"') < method_html.index('value="email"')
+    # Email registration and recovery are hidden until reliable SMTP is available.
+    assert 'id="auth-tab-signup" aria-pressed="false" hidden' in page
+    assert 'id="auth-tab-recover" aria-pressed="false" hidden' in page
+    assert 'id="account-signup" type="button" class="button secondary" hidden' in page
+    assert 'id="welcome-guest"' in page
+    assert "$('auth-method').value = 'google';" in js
     assert 'value="phone"' not in method_html
     assert 'auth-phone-area' not in page
     assert 'auth-phone' not in js

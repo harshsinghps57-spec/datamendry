@@ -214,7 +214,7 @@
       if (!state.config.enabled) { authEvent(); return; } // Guest CSV uploads remain available.
       $('account-panel').hidden = true;
       authEvent();
-      status('Log in or create an account to save CSV originals across visits. Guest uploads remain temporary.');
+      status('Sign in with Google to save CSV originals. Existing email accounts may log in with a password. Guest uploads remain temporary.');
       $('account-form').addEventListener('submit', e => { e.preventDefault(); login().catch(err => status(err.message)); });
       $('account-signup').addEventListener('click', () => { if (typeof window.DataMendryOpenAuth === 'function') window.DataMendryOpenAuth('signup'); else status('Use the account menu to create an account.'); });
       $('account-signout').addEventListener('click', () => logout().catch(err => status(err.message)));

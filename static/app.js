@@ -27,7 +27,7 @@ async function restoreDataset() {
   }
 }
 const state = { demoOnly: true, maxUploadMb: 0, id: null, profile: null, fileName: '', offset: 0, impact: null, simulatedRecipe: null, isBusy: false };
-const pageLabels = { overview: 'Overview', quality: 'Quality explorer', repair: 'Repair studio', rules: 'Rule checker', filter: 'Filter & export', guide: 'How it works' };
+const pageLabels = { overview: 'Overview', quality: 'Quality explorer', analytics: 'Analytics dashboard', repair: 'Repair studio', rules: 'Rule checker', filter: 'Filter & export', guide: 'How it works' };
 const number = n => Number(n).toLocaleString();
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const scrollBehavior = () => prefersReducedMotion.matches ? 'auto' : 'smooth';
@@ -46,6 +46,7 @@ function showPage(page) {
   document.querySelectorAll('.nav-link').forEach(node => node.classList.toggle('active', node.dataset.page === page));
   byId('crumb-page').textContent = pageLabels[page];
   clearNotice();
+  window.dispatchEvent(new CustomEvent('datamendry:page', { detail: { page } }));
   window.scrollTo({ top: 0, behavior: scrollBehavior() });
 }
 function metric(label, value, note) { const node = el('div', 'metric'); node.append(el('div', 'metric-label', label), el('div', 'metric-value', value), el('div', 'metric-note', note)); return node; }

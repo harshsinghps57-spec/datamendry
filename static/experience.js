@@ -288,11 +288,35 @@
     $('assistant-toggle').setAttribute('aria-expanded', String(open));
     if (open) { updateAssistantContext(); $('assistant-input').focus(); }
   };
+  // Wider by default, optional focus mode. No changes to suggestion or export logic.
+  const expandButton = $('assistant-expand');
+  const exampleButton = $('assistant-examples-toggle');
+  const promptRow = $('assistant-prompts');
+  const setAssistantExpanded = (expanded) => {
+    bot.classList.toggle('is-expanded', expanded);
+    expandButton.setAttribute('aria-pressed', String(expanded));
+    expandButton.setAttribute('aria-label', expanded ? 'Minimize assistant' : 'Expand assistant');
+    expandButton.title = expanded ? 'Minimize assistant workspace' : 'Expand assistant workspace';
+    expandButton.querySelector('span').textContent = expanded ? 'Minimize' : 'Expand';
+  };
+  expandButton.addEventListener('click', () => setAssistantExpanded(!bot.classList.contains('is-expanded')));
+  exampleButton.addEventListener('click', () => {
+    promptRow.hidden = !promptRow.hidden;
+    exampleButton.setAttribute('aria-expanded', String(!promptRow.hidden));
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && bot.classList.contains('is-expanded')) setAssistantExpanded(false);
+  });
   $('assistant-toggle').addEventListener('click', () => toggleBot(bot.hidden));
-  $('assistant-close').addEventListener('click', () => toggleBot(false));
+  $('assistant-close').addEventListener('click', () => { setAssistantExpanded(false); toggleBot(false); });
   window.addEventListener('datamendry:dataset', updateAssistantContext);
   updateAssistantContext();
   const botSay = (s, isUser = false) => {
+    if (isUser) {
+      $('assistant-intro').hidden = true;
+      promptRow.hidden = true;
+      exampleButton.setAttribute('aria-expanded', 'false');
+    }
     const node = document.createElement('p');
     node.className = `assistant-bubble ${isUser ? 'assistant-user' : 'assistant-bot'}`;
     node.textContent = String(s); // Never interpolate untrusted instructions as HTML.
@@ -349,7 +373,185 @@
       botSay('Column unchecked in Filter & export. Preview the new file before downloading.');
     }
   }
+  // Reusable cleaning recipes contain action settings and headers only, NEVER CSV rows.
+  const RECIPE_ACTIONS = new Set(['trim_whitespace','normalize_blanks','deduplicate','filter','exclude_column']);
+  const RECIPE_FILTERS = new Set(['contains','not_contains','equals','not_equals','empty','not_empty','gt','gte','lt','lte']);
+  const recipeHeaders = () => (ui()?.current()?.columns || []).map(String);
+  function normalizeRecipe(raw) {
+    if (!raw || raw.type !== 'datamendry-cleaning-recipe' || raw.version !== 1 ||
+        !Array.isArray(raw.columns) || !Array.isArray(raw.steps)) {
+      throw new Error('Not a supported DataMendry cleaning recipe (version 1).');
+    }
+    const current = recipeHeaders();
+    if (!ui()?.current()?.id || current.length === 0) throw new Error('Open a CSV before importing a recipe.');
+    if (raw.columns.length !== current.length || raw.columns.some((name,i) => name !== current[i])) {
+      throw new Error('This recipe needs a dataset with the same column headers and order. No changes were made.');
+    }
+    if (raw.steps.length < 2 || raw.steps.length > 5) throw new Error('A cleaning recipe needs 2–5 steps.');
+    const kinds = new Set();
+    const steps = raw.steps.map(step => {
+      if (!step || !RECIPE_ACTIONS.has(step.action) || kinds.has(step.action)) throw new Error('Recipe actions must be supported and unique.');
+      kinds.add(step.action);
+      const column = step.column ?? '';
+      const kind = step.kind ?? 'all';
+      const value = step.value ?? '';
+      if (typeof column !== 'string' || typeof kind !== 'string' || typeof value !== 'string' || value.length > 500) {
+        throw new Error('Invalid recipe parameters.');
+      }
+      if (step.action === 'filter') {
+        if (!current.includes(column) || !RECIPE_FILTERS.has(kind)) throw new Error('Unknown filter column or condition.');
+        if (['gt','gte','lt','lte'].includes(kind) && (!Number.isFinite(Number(value)) || !value.trim())) {
+          throw new Error('Numeric filters require a valid number.');
+        }
+      } else if (step.action === 'exclude_column') {
+        if (!current.includes(column) || kind !== 'all' || value) throw new Error('Unknown excluded column.');
+      } else if (column || value || kind !== 'all') {
+        throw new Error('Repair actions cannot include extra parameters.');
+      }
+      return {action:step.action,column,kind,value};
+    });
+    if (steps.filter(step=>step.action==='exclude_column').length && current.length < 2) throw new Error('Cannot remove the last CSV column.');
+    return steps;
+  }
+  function saveRecipe(steps) {
+    const columns = recipeHeaders();
+    if (!ui()?.current()?.id || !columns.length) return botSay('Open a CSV to save a recipe.');
+    const recipe = {type:'datamendry-cleaning-recipe',version:1,columns,steps};
+    const blob = new Blob([JSON.stringify(recipe,null,2)+'\n'],{type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;link.download='datamendry-cleaning-recipe.json';link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url),5000);
+  }
+  $('assistant-recipe-import').addEventListener('click',()=> $('assistant-recipe-file').click());
+  $('assistant-recipe-file').addEventListener('change',async event=>{
+    const file = event.target.files?.[0];event.target.value='';
+    if (!file) return;
+    try {
+      if (file.size > 32768) throw new Error('Recipe exceeds the 32 KB safety limit.');
+      const raw = JSON.parse(await file.text());
+      const steps = normalizeRecipe(raw);
+      offerWorkflowProposal({action:'workflow',steps,message:'Imported cleaning recipe. Review all steps, then preview before downloading. No CSV data has changed.'});
+    } catch(error) { botSay(error.message || 'Unable to open this cleaning recipe.'); }
+  });
+
+  function offerWorkflowProposal(proposal) {
+    const active = ui()?.current();
+    if (!active?.id) return botSay('Open a CSV before planning a workflow.');
+    const datasetId = active.id;
+    const steps = proposal.steps.map(step => ({action:step.action, column:step.column || '',
+      kind:step.kind || 'all', value:step.value || ''}));
+    const card = document.createElement('section');
+    card.className = 'assistant-proposal assistant-workflow';
+    const heading = document.createElement('strong');
+    heading.textContent = `✦ Combined workflow · ${steps.length} reviewable steps`;
+    const summary = document.createElement('p');
+    summary.textContent = proposal.message;
+    const list = document.createElement('ol');
+    list.className = 'assistant-workflow-steps';
+    proposal.steps.forEach(step => {
+      const item = document.createElement('li');
+      const label = {
+        trim_whitespace:'Trim surrounding whitespace',
+        normalize_blanks:'Normalize blank cells',
+        deduplicate:'Remove exact duplicate rows',
+        filter:`Filter ${step.column} (${step.kind}${step.value ? ': '+step.value : ''})`,
+        exclude_column:`Exclude column ${step.column}`
+      }[step.action] || 'Unknown action';
+      item.textContent = label;
+      list.append(item);
+    });
+    const actions = document.createElement('div');
+    actions.className = 'assistant-proposal-actions';
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button'; previewBtn.className = 'assistant-review';
+    previewBtn.textContent = 'Preview combined result';
+    const downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button'; downloadBtn.className = 'assistant-review';
+    downloadBtn.textContent = 'Download combined CSV ↓'; downloadBtn.disabled = true;
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button'; saveBtn.className = 'assistant-review';
+    saveBtn.textContent = 'Save recipe ↓';
+    saveBtn.addEventListener('click', () => {
+      if (ui()?.current()?.id !== datasetId) return botSay('Load this dataset again to save its cleaning recipe.');
+      saveRecipe(steps);
+    });
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button'; dismiss.className = 'assistant-dismiss';
+    dismiss.textContent = 'Dismiss';
+    const info = document.createElement('div');
+    info.className = 'assistant-workflow-result';
+    info.setAttribute('aria-live', 'polite');
+    const message = document.createElement('p');
+    message.textContent = 'Review all steps before preview. Only the downloaded copy will include changes.';
+    info.append(message);
+    actions.append(previewBtn,downloadBtn,saveBtn,dismiss);
+    card.append(heading,summary,list,actions,info);
+    $('assistant-messages').append(card);
+    $('assistant-messages').scrollTop = $('assistant-messages').scrollHeight;
+    let previewToken = '';
+    const stillCurrent = () => ui()?.current()?.id === datasetId;
+    const busy = value => { previewBtn.disabled = value; downloadBtn.disabled = value || !previewToken; };
+    previewBtn.addEventListener('click', async () => {
+      previewToken = ''; busy(true);
+      message.textContent = 'Calculating combined preview…';
+      info.replaceChildren(message);
+      try {
+        if (!stillCurrent()) throw new Error('Your dataset changed. Request a new workflow on the current CSV.');
+        const response = await fetch(`/api/datasets/${datasetId}/workflows/preview`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({steps})
+        });
+        if (!response.ok) throw new Error(`Preview failed (${response.status}). Check the selected steps.`);
+        const result = await response.json();
+        previewToken = result.preview_token;
+        message.textContent = `${result.matching_rows.toLocaleString()} rows in the result · ${result.removed_duplicates} duplicates removed · ${result.filtered_out_rows} rows filtered out. Preview shows up to 5 rows; the original remains unchanged.`;
+        info.replaceChildren(message);
+        if (result.warnings?.length) {
+          const warning = document.createElement('p'); warning.textContent = result.warnings.join(' ');
+          warning.className = 'assistant-workflow-warning'; info.append(warning);
+        }
+        const wrapper = document.createElement('div'); wrapper.className = 'assistant-workflow-table-wrap';
+        const table = document.createElement('table');
+        const head = document.createElement('thead'); const tr = document.createElement('tr');
+        result.columns.forEach(column => { const th = document.createElement('th'); th.textContent=column; tr.append(th); });
+        head.append(tr); table.append(head);
+        const body = document.createElement('tbody');
+        result.rows.slice(0,5).forEach(row => {
+          const rowEl = document.createElement('tr');
+          row.forEach(cell => { const td=document.createElement('td');td.textContent=String(cell ?? '');rowEl.append(td); });
+          body.append(rowEl);
+        });
+        table.append(body); wrapper.append(table); info.append(wrapper);
+        if (!result.rows.length) {
+          const empty = document.createElement('p');empty.textContent='No rows match this workflow. Review your conditions before downloading.';
+          info.append(empty);
+        }
+      } catch(error) { message.textContent=error.message; }
+      finally { busy(false); $('assistant-messages').scrollTop = $('assistant-messages').scrollHeight; }
+    });
+    downloadBtn.addEventListener('click', async () => {
+      if (!previewToken) return;
+      busy(true);
+      try {
+        if (!stillCurrent()) throw new Error('Your dataset changed. Preview a new workflow first.');
+        const response = await fetch(`/api/datasets/${datasetId}/workflows/export`, {
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({steps, preview_token: previewToken})
+        });
+        if (!response.ok) throw new Error(`Download failed (${response.status}). Preview this workflow again.`);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');link.href=url;link.download='datamendry-workflow.csv';link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url),120000);
+        message.textContent='Combined CSV downloaded. The original dataset remains unchanged.';
+      } catch(error) { message.textContent=error.message; }
+      finally { busy(false); }
+    });
+    dismiss.addEventListener('click',() => card.remove());
+  }
+
   function offerProposal(proposal) {
+    if (proposal?.action === 'workflow') return offerWorkflowProposal(proposal);
     if (!proposal || proposal.action === 'none') {
       botSay(proposal?.message || 'I could not match that instruction to a supported operation.');
       return;
@@ -385,6 +587,12 @@
     if (!filtersCurrent()) return botSay('First upload a CSV. Then I can guide you through filters, duplicates and whitespace cleaning.');
     setAssistantBusy(true);
     try {
+      // Combined workflows are always planned locally, not sent to an AI provider.
+      const localPlan = await guidedPlan(message);
+      if (localPlan.action === 'workflow' || /[,;]|\b(?:and|then)\b/i.test(message)) {
+        offerProposal(localPlan);
+        return;
+      }
       if ($('assistant-ai-consent').checked) {
         try {
           const config = await fetch('/api/assistant/config', { cache:'no-store' }).then(r => r.json());
@@ -398,7 +606,7 @@
           botSay(`AI connection unavailable: ${error.message}. Switching to private guided suggestions.`);
         }
       }
-      offerProposal(await guidedPlan(message));
+      offerProposal(localPlan);
     } catch (error) {
       botSay(error.message || 'Could not interpret the request.');
     } finally {

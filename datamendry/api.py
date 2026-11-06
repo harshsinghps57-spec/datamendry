@@ -32,6 +32,11 @@ from starlette.responses import PlainTextResponse
 from datamendry.engine import DatasetError, RepairOptions, export_csv_chunks, fetch_preview, import_csv, make_connection, simulate
 from datamendry.filters import FILTER_KINDS, filtered_preview, filtered_csv_chunks
 from datamendry.assistant_planner import plan_instruction
+from datamendry.analytics_v1 import analyze_column
+from datamendry.analytics_relationships import relationship_overview, relationship_pair
+from datamendry.smart_relationships import smart_overview, smart_pair
+from datamendry.workflow_v1 import plan_workflow, validate_workflow, workflow_preview, workflow_export_chunks
+from datamendry.advanced_cleaning import validate_steps as validate_advanced_steps, preview as preview_advanced, export_chunks as export_advanced
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DATASET_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
@@ -90,6 +95,31 @@ class FilterRequest(BaseModel):
 class AssistantRequest(BaseModel):
     message: str = Field(min_length=1, max_length=500)
     consent_to_column_names: bool = False
+
+
+class WorkflowStep(BaseModel):
+    action: Literal["trim_whitespace", "normalize_blanks", "deduplicate", "filter", "exclude_column"]
+    column: str = Field(default="", max_length=200)
+    kind: Literal["all", "contains", "not_contains", "equals", "not_equals", "empty", "not_empty", "lt", "lte", "gt", "gte"] = "all"
+    value: str = Field(default="", max_length=500)
+
+
+class WorkflowRequest(BaseModel):
+    steps: list[WorkflowStep] = Field(min_length=2, max_length=5)
+    preview_token: str = Field(default="", max_length=128)
+
+
+class AdvancedStep(BaseModel):
+    action: Literal["fill_blank", "lowercase", "uppercase", "titlecase", "replace_literal", "round_number"]
+    column: str = Field(min_length=1, max_length=200)
+    value: str = Field(default="", max_length=150)
+    replacement: str = Field(default="", max_length=150)
+    places: int = Field(default=0, ge=0, le=6)
+
+
+class AdvancedRequest(BaseModel):
+    steps: list[AdvancedStep] = Field(min_length=1, max_length=6)
+    preview_token: str = Field(default="", max_length=128)
 
 
 class RequestBodyLimit:
@@ -196,7 +226,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             with suppress(asyncio.CancelledError):
                 await task
 
-    app = FastAPI(title="DataMendry API", version="0.7.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="DataMendry API", version="1.0.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.add_middleware(RequestBodyLimit, config=config)
     jobs = threading.BoundedSemaphore(config.max_parallel_jobs)
     workspace_lock = threading.Lock()
@@ -274,7 +304,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/static/{filename}")
     def asset(filename: str):
-        if filename not in {"app.js", "app.css", "account.js", "experience.js", "experience.css", "verify.js"}:
+        if filename not in {"app.js", "app.css", "account.js", "experience.js", "experience.css", "verify.js", "analytics.js", "smart_analytics.js", "advanced_cleaning.js"}:
             raise HTTPException(404, "Asset not found")
         return FileResponse(PROJECT_DIR / "static" / filename)
 
@@ -288,7 +318,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.7.0"}
+        return {"status": "ok", "version": "1.0.0"}
 
     # Only the publishable key is sent to browsers. Never add a service-role key here.
     @app.get("/api/account-config")
@@ -466,6 +496,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _, meta = get_dataset(dataset_id, request)
         return public_profile(meta)
 
+    @app.get("/api/datasets/{dataset_id}/analytics")
+    def analytics(dataset_id: str, request: Request, column: str = Query(min_length=1, max_length=200)):
+        # Uses the same expiring, browser-owned dataset check as previews/exports.
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            if column not in meta["columns"]:
+                raise HTTPException(422, "Unknown column")
+            return analyze_column(db, meta["columns"], column)
+
+    @app.get("/api/datasets/{dataset_id}/relationships")
+    def relationships(dataset_id: str, request: Request):
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            return relationship_overview(db, meta["columns"])
+
+    @app.get("/api/datasets/{dataset_id}/relationships/pair")
+    def relationships_pair(dataset_id: str, request: Request,
+                           x: str = Query(min_length=1, max_length=200),
+                           y: str = Query(min_length=1, max_length=200)):
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            try:
+                return relationship_pair(db, meta["columns"], x, y)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/datasets/{dataset_id}/smart/overview")
+    def smart_analytics_overview(dataset_id: str, request: Request):
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            return smart_overview(db, meta["columns"])
+
+    @app.get("/api/datasets/{dataset_id}/smart/pair")
+    def smart_analytics_pair(dataset_id: str, request: Request,
+                             x: str = Query(min_length=1, max_length=200),
+                             y: str = Query(min_length=1, max_length=200)):
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            try:
+                return smart_pair(db, meta["columns"], x, y)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+
     @app.get("/api/datasets/{dataset_id}/preview")
     def preview(dataset_id: str, request: Request, limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)):
         db, meta = get_dataset(dataset_id, request)
@@ -526,12 +599,102 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                  headers={"Content-Disposition": 'attachment; filename="datamendry-filtered.csv"',
                                           "X-Content-Type-Options": "nosniff"})
 
+
+    # Advanced transformations are preview-first, session-isolated, and read-only
+    # against the source database; no code or SQL is accepted from user steps.
+    advanced_preview_key = secrets.token_bytes(32)
+
+    def advanced_token(dataset_id: str, steps: list[dict], request: Request) -> str:
+        payload = json.dumps([dataset_id, session_owner(request), steps],
+                             sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hmac.new(advanced_preview_key, payload, hashlib.sha256).hexdigest()
+
+    @app.post("/api/datasets/{dataset_id}/advanced/preview")
+    def advanced_preview(dataset_id: str, spec: AdvancedRequest, request: Request):
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            steps = [s.model_dump(exclude={"preview_token"}) for s in spec.steps]
+            try:
+                result = preview_advanced(db, meta["columns"], steps)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            result["preview_token"] = advanced_token(dataset_id, steps, request)
+            return result
+
+    @app.post("/api/datasets/{dataset_id}/advanced/export")
+    def advanced_export(dataset_id: str, spec: AdvancedRequest, request: Request):
+        db, meta = get_dataset(dataset_id, request)
+        steps = [s.model_dump() for s in spec.steps]
+        try:
+            validate_advanced_steps(meta["columns"], steps)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        if not spec.preview_token or not hmac.compare_digest(
+                spec.preview_token, advanced_token(dataset_id, steps, request)):
+            raise HTTPException(403, "Preview this exact cleaning plan before downloading")
+        if not jobs.acquire(blocking=False):
+            raise HTTPException(429, "Server is busy; try again later")
+
+        def stream():
+            try:
+                yield from export_advanced(db, meta["columns"], steps)
+            finally:
+                jobs.release()
+        return StreamingResponse(stream(), media_type="text/csv; charset=utf-8",
+                                 headers={"Content-Disposition": 'attachment; filename="datamendry-advanced-cleaned.csv"',
+                                          "X-Content-Type-Options": "nosniff"})
+
+    # Preview tokens bind the exact recipe to the current guest session, allowing
+    # combined exports only after the user has previewed that same recipe.
+    workflow_preview_key = secrets.token_bytes(32)
+
+    def workflow_token(dataset_id: str, spec: WorkflowRequest, request: Request) -> str:
+        recipe = [step.model_dump() for step in spec.steps]
+        payload = json.dumps([dataset_id, session_owner(request), recipe],
+                             sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hmac.new(workflow_preview_key, payload, hashlib.sha256).hexdigest()
+
+    @app.post("/api/datasets/{dataset_id}/workflows/preview")
+    def preview_workflow(dataset_id: str, spec: WorkflowRequest, request: Request):
+        with job_slot():
+            db, meta = get_dataset(dataset_id, request)
+            try:
+                steps = [step.model_dump() for step in spec.steps]
+                result = workflow_preview(db, meta["columns"], steps, limit=25)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            result["preview_token"] = workflow_token(dataset_id, spec, request)
+            return result
+
+    @app.post("/api/datasets/{dataset_id}/workflows/export")
+    def export_workflow(dataset_id: str, spec: WorkflowRequest, request: Request):
+        db, meta = get_dataset(dataset_id, request)
+        steps = [step.model_dump() for step in spec.steps]
+        try:
+            validate_workflow(meta["columns"], steps)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        if not spec.preview_token or not secrets.compare_digest(
+                spec.preview_token, workflow_token(dataset_id, spec, request)):
+            raise HTTPException(403, "Preview this exact workflow before downloading")
+        if not jobs.acquire(blocking=False):
+            raise HTTPException(429, "Server is busy; try again later")
+
+        def export():
+            try:
+                yield from workflow_export_chunks(db, meta["columns"], steps)
+            finally:
+                jobs.release()
+        return StreamingResponse(export(), media_type="text/csv; charset=utf-8",
+                                 headers={"Content-Disposition": 'attachment; filename="datamendry-workflow.csv"',
+                                          "X-Content-Type-Options": "nosniff"})
+
     @app.post("/api/datasets/{dataset_id}/assistant/plan")
     def assistant_plan(dataset_id: str, spec: AssistantRequest, request: Request):
         # A no-cost, deterministic planner; no uploaded data is transmitted to any provider.
         # The existing browser/guest ownership checks apply to all suggestions.
         _, metadata = get_dataset(dataset_id, request)
-        return plan_instruction(spec.message, metadata["columns"])
+        return plan_workflow(spec.message, metadata["columns"]) or plan_instruction(spec.message, metadata["columns"])
 
     @app.get("/api/assistant/config")
     def assistant_config():

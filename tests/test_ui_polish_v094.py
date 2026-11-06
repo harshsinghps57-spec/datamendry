@@ -40,7 +40,7 @@ def test_assistant_is_circle_and_sixth_guide_step_exists():
     assert "$('assistant-toggle')" in EXPERIENCE
     assert '.assistant-toggle { width:58px;height:58px;' in CSS
     guide = HTML.split('<section id="page-guide"', 1)[1].split('</section>', 1)[0]
-    assert guide.count('<article') == 6
+    assert guide.count('<article') == 7  # analytics guide step added in v1
     attr_of('guide-assistant')
     assert "$('guide-assistant').addEventListener('click'" in EXPERIENCE
 
@@ -67,7 +67,7 @@ def test_only_top_right_account_menu_and_actions_remain():
 def test_breadcrumb_navigation_is_clickable():
     attr_of('crumb-workspace')
     assert attr_of('crumb-page')['aria-controls'] == 'crumb-menu'
-    assert sum(1 for _, attrs in ELEMENTS if 'data-crumb-page' in attrs) == 6
+    assert sum(1 for _, attrs in ELEMENTS if 'data-crumb-page' in attrs) == 7  # analytics navigation added
     assert 'ui()?.navigate(button.dataset.crumbPage)' in EXPERIENCE
     assert 'crumb-page' in APP
 

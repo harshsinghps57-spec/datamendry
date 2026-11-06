@@ -36,7 +36,7 @@ def plan_instruction(message: str, columns: list[str]) -> dict:
                 "kind": kind, "value": value, "message": message,
                 "applied": False}
 
-    if re.search(r"\b(duplicate|dedup|repeated rows?)\b", lower):
+    if re.search(r"\b(duplicates?|dedup(?:licate|lication)?|repeated rows?)\b", lower):
         return result("deduplicate", message="Review exact duplicate-row removal in Repair Studio; your original stays untouched.")
     if re.search(r"\b(trim|whitespace|extra spaces?)\b", lower):
         return result("trim_whitespace", message="Review whitespace trimming before exporting a new CSV.")
@@ -46,6 +46,32 @@ def plan_instruction(message: str, columns: list[str]) -> dict:
         return result(message="This guided version cannot calculate or fill median/mean values or create new columns. Use Repair Studio or connect an appropriately tested model for planning; no changes were made.")
     if not col:
         return result(message="Name an existing CSV column in your request. For example: 'Remove rows where CGPA is below 6' or 'Keep Region contains West'.")
+
+    # Keep guidance unambiguous: one filter at a time, on one existing column.
+    # Reject multiple column mentions instead of silently choosing the longest.
+    matches = [name for name in columns if _match_column(text, [name])]
+    if len(set(matches)) > 1:
+        return result(message="I found multiple CSV columns in that request. Please choose one column and one condition at a time; nothing has been changed.")
+
+    # Read-only blank-value filtering already exists in Filter & export.
+    # Interpret requests such as "show rows where CGPA is missing" and
+    # "remove rows where Region is empty" without inventing a cleaning action.
+    # A vague "remove missing values" is intentionally NOT treated as a delete.
+    nonempty = bool(re.search(
+        r"\b(?:not\s+(?:missing|blank|empty|null)|non[- ]?empty|filled|present|has\s+(?:a\s+)?values?)\b", lower))
+    empty = bool(re.search(
+        r"\b(?:missing|blank|empty|null|no\s+values?|without\s+(?:a\s+)?values?)\b", lower))
+    explicit_rows = bool(re.search(r"\b(?:rows?|records?|entries|students|where|keep|show|filter)\b", lower))
+    if (empty or nonempty) and explicit_rows:
+        if re.search(r"\b(?:and|or)\b.*\b(?:missing|blank|empty|null|filled|present)\b", lower):
+            return result(message="Please request one blank-value condition at a time; nothing has been changed.")
+        is_blank = not nonempty
+        if re.search(r"\b(?:remove|delete|drop|exclude)\b", lower):
+            is_blank = not is_blank
+        kind = "empty" if is_blank else "not_empty"
+        human = "blank" if is_blank else "nonblank"
+        return result("filter", col, kind, "",
+                      f"Review rows where {col} is {human} in Filter & export. Preview the matching rows before downloading a new CSV; your original is unchanged.")
 
     # Drop a column, but not rows. Exact column name is validated against the dataset schema.
     if re.search(r"\b(remove|delete|drop|exclude|hide)\b", lower) and re.search(r"\bcolumn|field\b", lower):

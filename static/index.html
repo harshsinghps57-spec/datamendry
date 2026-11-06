@@ -8,10 +8,68 @@
   <title>DataMendry — Data Repair Workspace</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%2351d7c1'/%3E%3Ctext x='50%25' y='70%25' text-anchor='middle' font-family='Arial,sans-serif' font-size='42' font-weight='bold' fill='%230a2130'%3ED%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/experience.css" />
   <script src="/static/app.js" defer></script>
+  <script src="/static/account.js" defer></script>
+  <script src="/static/experience.js" defer></script>
   <!-- Cloudflare Web Analytics --><script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "a258c3d633374858af151e69e50e4477"}'></script><!-- End Cloudflare Web Analytics -->
 </head>
 <body>
+<div id="welcome-gate" class="welcome-gate" aria-label="DataMendry welcome and login">
+  <div class="welcome-atmosphere" aria-hidden="true"><span></span><span></span><span></span></div>
+  <div class="welcome-card">
+    <div class="welcome-logo" aria-hidden="true">D</div>
+    <div class="welcome-kicker">YOUR PRIVATE DATA REPAIR STUDIO</div>
+    <h1>Data<span>Mendry</span></h1>
+    <p>Clean, explore and understand your datasets. Your original files remain yours.</p>
+    <div class="welcome-actions">
+      <button id="welcome-signin" type="button" class="button primary">Get started — Sign in <span aria-hidden="true">→</span></button>
+      <button id="welcome-guest" type="button" class="button secondary">Explore as guest</button>
+    </div>
+    <p class="welcome-note">Guest processing is temporary. Sign in to save originals to private cloud storage.</p>
+    <div class="welcome-door" aria-hidden="true"><div class="door-left"></div><div class="door-right"></div></div>
+  </div>
+</div>
+<dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
+  <button id="auth-close" class="dialog-close" type="button" aria-label="Close login">×</button>
+  <div class="welcome-logo small" aria-hidden="true">D</div>
+  <h2 id="auth-title">Welcome to DataMendry</h2>
+  <p class="subtle">Secure accounts for your private CSV workspace.</p>
+  <div class="auth-tabs" role="group" aria-label="Account options">
+    <button type="button" class="active" id="auth-tab-login" aria-pressed="true">Log in</button>
+    <button type="button" id="auth-tab-signup" aria-pressed="false">Create account</button>
+    <button type="button" id="auth-tab-recover" aria-pressed="false">Forgot password?</button>
+  </div>
+  <label class="auth-label">Sign in with
+    <select id="auth-method"><option value="email">Email address</option><option value="google">Google account</option></select>
+  </label>
+  <div id="auth-email-area">
+    <label class="auth-label">Email address<input id="auth-email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com"></label>
+    <label id="auth-recovery-method-row" class="auth-label" hidden>Receive recovery code or link
+      <select id="auth-email-method"><option value="code">Email one-time code</option><option value="link">Email verification link</option></select>
+    </label>
+    <label id="auth-password-row" class="auth-label">Password<input id="auth-password" type="password" autocomplete="current-password" minlength="8"></label>
+    <label id="auth-password-confirm-row" class="auth-label" hidden>Confirm password<input id="auth-password-confirm" type="password" autocomplete="new-password" minlength="8"></label>
+    <p id="auth-flow-hint" class="subtle">Already registered? Sign in using your password. Use email OTP only for account recovery.</p>
+    <div id="auth-password-buttons" class="auth-button-row"><button id="auth-login" class="button primary" type="button">Log in with password</button><button id="auth-signup" class="button primary" type="button" hidden>Create account</button></div>
+    <button id="auth-send-email" class="button primary" type="button" hidden>Send email code</button>
+    <p id="auth-recovery-limit" class="subtle" hidden>Email recovery is limited by Supabase's delivery quota. Request one code and use the latest email; avoid repeated requests.</p>
+  </div>
+  <div id="auth-google-area" hidden><p class="subtle">Use your Google account without requesting an email OTP. Google OAuth must first be configured in Google Cloud and Supabase.</p><button id="auth-google" class="button primary" type="button">Continue with Google</button></div>
+  
+  <div id="auth-otp-area" hidden><label class="auth-label">Verification code<input id="auth-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Code from your latest email"></label><button id="auth-verify-otp" class="button primary" type="button">Verify and sign in</button></div>
+  <p id="auth-feedback" class="auth-feedback" role="status" aria-live="polite"></p>
+</dialog>
+<dialog id="password-dialog" class="auth-dialog" aria-labelledby="password-title">
+  <button type="button" id="password-close" class="dialog-close" aria-label="Close change password">×</button>
+  <div class="welcome-logo small" aria-hidden="true">D</div>
+  <h2 id="password-title">Set or change password</h2>
+  <p class="subtle">If you signed in using an email code, you can now create a password. Next time, log in without requesting another email.</p>
+  <label class="auth-label">New password<input id="password-new" type="password" autocomplete="new-password" minlength="8"></label>
+  <label class="auth-label">Confirm new password<input id="password-confirm" type="password" autocomplete="new-password" minlength="8"></label>
+  <button type="button" id="password-save" class="button primary">Save password</button>
+  <p id="password-feedback" class="auth-feedback" role="status" aria-live="polite"></p>
+</dialog>
 <div class="shell">
   <aside class="sidebar" aria-label="Main navigation">
     <a href="/" class="brand" aria-label="DataMendry home"><span class="brand-icon" aria-hidden="true">D<span>·</span></span><span>Data<span class="brand-light">Mendry</span><small>DATA REPAIR STUDIO</small></span></a>
@@ -21,11 +79,42 @@
       <button class="nav-link" data-page="quality" type="button"><span class="nav-ico">◈</span>Quality explorer</button>
       <button class="nav-link" data-page="repair" type="button"><span class="nav-ico">✳</span>Repair studio</button>
       <button class="nav-link" data-page="rules" type="button"><span class="nav-ico">☷</span>Rule checker</button>
+      <button class="nav-link" data-page="filter" type="button"><span class="nav-ico">≡</span>Filter &amp; export</button>
+      <button class="nav-link" data-page="guide" type="button"><span class="nav-ico">◎</span>How it works</button>
     </nav>
-    <div class="sidebar-bottom"><div class="status-dot"><i></i>Local engine · v0.2</div><div class="side-note">No AI keys. No automatic changes. Your original CSV remains untouched.</div><a href="/api/docs" target="_blank" rel="noopener" class="api-link">Explore developer API ↗</a></div>
+    <div class="sidebar-bottom">
+      <div class="side-note">No automatic changes. Your original CSV remains untouched.</div>
+    </div>
   </aside>
   <main class="main">
-    <header class="topbar"><div class="crumb">WORKSPACE <span>/</span> <b id="crumb-page">Overview</b></div><div class="top-actions"><span class="pill">BETA BUILD</span><a href="https://github.com" class="external" target="_blank" rel="noopener">Open source ↗</a></div></header>
+    <header class="topbar">
+      <nav class="crumb" aria-label="Workspace breadcrumb">
+        <button type="button" id="crumb-workspace" class="crumb-link" title="Go to Overview">WORKSPACE</button>
+        <span aria-hidden="true">/</span>
+        <button type="button" id="crumb-page" class="crumb-current" aria-haspopup="true" aria-expanded="false" aria-controls="crumb-menu">Overview</button>
+        <div id="crumb-menu" class="crumb-menu" hidden aria-label="Go to section">
+          <button type="button" data-crumb-page="overview">Overview</button>
+          <button type="button" data-crumb-page="quality">Quality explorer</button>
+          <button type="button" data-crumb-page="repair">Repair studio</button>
+          <button type="button" data-crumb-page="rules">Rule checker</button>
+          <button type="button" data-crumb-page="filter">Filter &amp; export</button>
+          <button type="button" data-crumb-page="guide">How it works</button>
+        </div>
+      </nav>
+      <div class="top-actions">
+        <div class="profile-widget">
+          <button type="button" id="profile-toggle" class="profile-toggle" aria-controls="profile-popover" aria-expanded="false"><span class="account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.7"/><path d="M5.1 20v-1.1c0-3.1 3.1-5.3 6.9-5.3s6.9 2.2 6.9 5.3V20"/></svg></span><span id="profile-top-name">Account</span><span aria-hidden="true">⌄</span></button>
+          <div id="profile-popover" class="profile-popover" hidden>
+            <div id="profile-label" class="profile-label">Guest</div>
+            <button id="profile-my-datasets" type="button">My Datasets</button>
+            <button id="profile-password" type="button" hidden>Set / change password</button>
+            <button id="profile-login" type="button">Log in / Register</button>
+            <button id="profile-logout" type="button" hidden>Sign out</button>
+          </div>
+        </div>
+        <span class="pill">BETA BUILD</span><a href="https://github.com/harshsinghps57-spec/datamendry" class="external" target="_blank" rel="noopener noreferrer" aria-label="Open DataMendry source repository on GitHub">Open source ↗</a>
+      </div>
+    </header>
     <div class="content">
       <div id="notice" role="status" aria-live="polite" hidden></div>
       <section id="page-overview" class="page active">
@@ -38,6 +127,21 @@
           <input id="file-input" type="file" accept=".csv,text/csv" hidden />
           <div class="upload-foot">UTF-8 CSV · Up to 200 MiB by default · File stored temporarily on this server</div>
         </div>
+        <section id="account-panel" class="account-panel panel" aria-labelledby="account-title" hidden>
+          <div class="panel-head"><h3 id="account-title">My Datasets — Cloud Storage</h3><span class="subtle">Private files saved to your account</span></div>
+          <p id="account-info" class="subtle" role="status" aria-live="polite"></p>
+          <form id="account-form" class="account-form">
+            <label>Email <input id="account-email" type="email" autocomplete="email" required maxlength="254"></label>
+            <label>Password <input id="account-password" type="password" autocomplete="current-password" required minlength="8"></label>
+            <div class="account-actions"><button type="submit" class="button primary">Log in</button><button id="account-signup" type="button" class="button secondary">Create account</button></div>
+            <p class="subtle">Verify your email if prompted. Use a strong, unique password. This preview does not accept confidential datasets.</p>
+          </form>
+          <div id="account-signed" hidden>
+            <div class="account-actions"><span id="account-identity" class="subtle"></span><button id="account-refresh" type="button" class="button secondary tiny">Refresh saved files</button><button id="account-signout" type="button" class="button secondary tiny">Sign out</button></div>
+            <div id="account-files" class="account-files" aria-live="polite"></div>
+            <details class="storage-disclosure"><summary>Storage &amp; privacy details</summary><p>Account-saved originals are stored privately in Supabase and remain subject to provider storage quotas and retention policies. Temporary analysis copies can expire or be deleted when the server restarts. Avoid uploading sensitive datasets until the service has been independently reviewed for your use case.</p></details>
+          </div>
+        </section>
         <div id="loading" class="loading" hidden><span class="spinner"></span><span id="loading-label">Analyzing your dataset…</span></div>
         <div id="dataset-results" hidden>
           <div class="section-heading"><div><div class="eyebrow">CURRENT DATASET</div><h2 id="dataset-name">—</h2><p>Profiled and ready to inspect. All transformations are proposals until exported.</p></div><button id="remove-button" class="button ghost-danger" type="button">Delete uploaded data</button></div>
@@ -49,9 +153,36 @@
       <section id="page-quality" class="page"><div class="eyebrow">DIAGNOSE</div><h1 class="page-title">Quality explorer</h1><p class="intro small">A detailed overview of your dataset, without downloading all rows into the browser.</p><div class="empty-state" data-empty>Upload a dataset on Overview first.</div><div class="requires-data" hidden><div class="metrics" id="quality-metrics"></div><div class="panel"><div class="panel-head"><h3>Missing data by column</h3><span class="subtle">Exact counts, not estimates</span></div><div id="quality-columns" class="column-table-wrap"></div></div><div class="panel"><div class="panel-head"><h3>Preview records</h3><div class="pagination"><button id="prev-page" class="button tiny" type="button">← Previous</button><span id="page-number">Page 1</span><button id="next-page" class="button tiny" type="button">Next →</button></div></div><div id="table-container" class="table-scroll"></div><p class="help">Showing at most 25 rows per page. All CSV fields are treated as text to preserve IDs and leading zeros.</p></div></div></section>
       <section id="page-repair" class="page"><div class="eyebrow">WHAT-IF ANALYSIS</div><h1 class="page-title">Repair studio</h1><p class="intro small">Choose deterministic operations, calculate their exact impact, then export the repaired file and a JSON audit recipe.</p><div class="empty-state" data-empty>Upload a dataset on Overview first.</div><div class="requires-data" hidden><div class="panel"><div class="panel-head"><h3>Proposed transformations</h3><span class="subtle">Original dataset preserved</span></div><div class="switch-list"><label class="switch-row"><span><strong>Trim surrounding whitespace</strong><small>Remove spaces around field values. Does not alter internal whitespace.</small></span><input id="opt-trim" type="checkbox" /></label><label class="switch-row"><span><strong>Normalize blank fields</strong><small>Convert whitespace-only cells to empty values, without inventing values.</small></span><input id="opt-blanks" type="checkbox" /></label><label class="switch-row"><span><strong>Remove identical rows</strong><small>Keep the earliest occurrence after your other transformations.</small></span><input id="opt-dedupe" type="checkbox" /></label></div><button id="simulate-button" class="button primary" type="button">Calculate repair impact →</button></div><div class="panel" id="impact-panel"><div class="panel-head"><h3>Repair impact</h3><span class="subtle">Before vs. after</span></div><div id="impact-empty" class="impact-empty">Choose options and calculate impact to review changes.</div><div id="impact-results" hidden><div id="impact-metrics" class="impact-grid"></div><p id="impact-warning" class="warning" hidden></p><div class="export-actions"><button id="export-csv" class="button primary" type="button">Download cleaned CSV ↓</button><button id="export-json" class="button secondary" type="button">Download audit JSON ↓</button></div><p class="help">Review the report carefully. Data loss from deduplication may be legitimate records.</p></div></div></div></section>
       <section id="page-rules" class="page"><div class="eyebrow">DATA CONTRACTS</div><h1 class="page-title">Rule checker</h1><p class="intro small">Run transparent, column-level validation. Checks are read-only: failed rules never modify data.</p><div class="empty-state" data-empty>Upload a dataset on Overview first.</div><div class="requires-data" hidden><div class="panel"><div class="panel-head"><h3>Create a data-quality rule</h3></div><div class="rule-form"><label>Column<select id="rule-column"></select></label><label>Check<select id="rule-kind"><option value="not_empty">Must not be empty</option><option value="unique">Values must be unique</option><option value="numeric">Must contain valid numbers</option><option value="minimum">Numeric value at least…</option><option value="maximum">Numeric value at most…</option></select></label><label id="threshold-wrap" hidden>Threshold<input id="rule-threshold" type="number" step="any" placeholder="0" /></label></div><button id="run-rule" class="button primary" type="button">Run validation →</button></div><div class="panel"><div class="panel-head"><h3>Validation results</h3></div><div id="rule-results" class="rules-results"><p class="subtle">No checks run yet.</p></div></div></div></section>
+
+      <section id="page-filter" class="page"><div class="eyebrow">MAKE A NEW COPY</div><h1 class="page-title">Filter &amp; export</h1><p class="intro small">Keep matching rows, choose your output columns, review a preview, then download a separate CSV. Your saved original is not changed.</p><div class="empty-state" data-empty>Upload or open a dataset first.</div><div class="requires-data" hidden><div class="panel"><div class="panel-head"><h3>Choose rows</h3><span class="subtle">Rules apply to this export only</span></div><div class="filter-controls"><label>Column<select id="filter-column"></select></label><label>Condition<select id="filter-kind"><option value="all">All rows</option><option value="contains">Contains text</option><option value="not_contains">Does not contain</option><option value="equals">Exactly equals</option><option value="not_equals">Does not equal</option><option value="empty">Is blank</option><option value="not_empty">Is not blank</option><option value="gt">Number is greater than</option><option value="gte">Number is at least</option><option value="lt">Number is less than</option><option value="lte">Number is at most</option></select></label><label>Value<input id="filter-value" maxlength="500" placeholder="Filter text"></label></div><h3>Columns to keep</h3><p class="subtle">Uncheck columns you want to remove from your exported file.</p><div id="filter-columns" class="filter-columns"></div><div class="account-actions"><button id="filter-preview" class="button primary" type="button">Preview filtered data</button><button id="filter-download" class="button secondary" type="button" disabled>Download filtered CSV ↓</button></div><p id="filter-summary" class="subtle" aria-live="polite"></p><div class="table-scroll" id="filter-table"></div></div></div></section>
+      <section id="page-guide" class="page"><div class="eyebrow">WELCOME TOUR</div><h1 class="page-title">How DataMendry works</h1><p class="intro small">A simple step-by-step path from your first upload to a verified export.</p><div class="guide-steps"><article><b>01</b><h3>Sign in</h3><p>Use email or Google to keep your CSV originals in your private account.</p><button type="button" class="button secondary" id="guide-account">Account settings</button></article><article><b>02</b><h3>Upload</h3><p>Choose CSV file. The data engine checks columns, missing cells and duplicates.</p><button type="button" class="button secondary" data-guide-page="overview">Go to upload</button></article><article><b>03</b><h3>Explore &amp; filter</h3><p>Inspect quality, choose matching rows or exclude unwanted columns.</p><button type="button" class="button secondary" data-guide-page="filter">Open filter</button></article><article><b>04</b><h3>Repair safely</h3><p>Preview changes before exporting. Your original stays unchanged.</p><button type="button" class="button secondary" data-guide-page="repair">Open repair studio</button></article><article><b>05</b><h3>Export &amp; return</h3><p>Download your results. Your account-saved original remains available until you delete it, subject to storage terms.</p><button type="button" class="button secondary" data-guide-page="overview">My datasets</button></article><article class="guide-ai-step"><b>06</b><h3>Ask DataMendry</h3><p>Describe the cleanup you want. Review the suggested filter or repair before exporting; AI is optional.</p><button type="button" class="button secondary" id="guide-assistant">Open assistant</button></article></div></section>
     </div>
-    <footer>DataMendry v0.2 · Free & open-source · Preview build — not yet audited for sensitive production data</footer>
+    <footer>© 2026 DataMendry · Clean with confidence · Your original remains yours</footer>
   </main>
+</div>
+<div id="assistant-dock" class="assistant-dock">
+  <button id="assistant-toggle" class="assistant-toggle" type="button" aria-label="Ask DataMendry AI assistant" title="Ask DataMendry" aria-expanded="false" aria-controls="assistant-panel"><span class="assistant-fab-star" aria-hidden="true">✦</span><span class="assistant-fab-orbit" aria-hidden="true"></span></button>
+  <section id="assistant-panel" class="assistant-panel" hidden aria-label="DataMendry assistant">
+    <div class="assistant-ambient" aria-hidden="true"></div>
+    <header class="assistant-head">
+      <div class="assistant-identity"><div class="assistant-avatar" aria-hidden="true">✦</div><div><strong>DataMendry Assistant</strong><span id="assistant-status" class="assistant-status"><i aria-hidden="true"></i> Guided help · private by default</span></div></div>
+      <button type="button" id="assistant-close" aria-label="Close assistant">×</button>
+    </header>
+    <div class="assistant-context"><span class="assistant-dataset-icon" aria-hidden="true">▤</span><span id="assistant-dataset">No CSV loaded</span><span class="assistant-safe-chip">Preview only</span></div>
+    <p class="assistant-intro">Tell me what you want to clean. I can prepare safe actions for review, then you decide whether to export.</p>
+    <div class="assistant-prompts" aria-label="Suggested commands">
+      <button type="button" data-assistant-prompt="Remove duplicate rows">✧ Remove duplicates</button>
+      <button type="button" data-assistant-prompt="Trim whitespace">✧ Trim spaces</button>
+      <button type="button" data-assistant-prompt="Normalize blank cells">✧ Fix blanks</button>
+      <button type="button" data-assistant-prompt="Help me filter my CSV">✧ Filter data</button>
+      <button type="button" data-assistant-prompt="Keep rows where CGPA is above 6">✧ Numeric filter</button>
+    </div>
+    <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text"><p class="assistant-welcome-message">Hi! Upload a CSV or choose a suggestion above to get started. Your original file stays unchanged.</p></div>
+    <div id="assistant-thinking" class="assistant-thinking" role="status" hidden><span class="assistant-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Working on your suggestion…</span></div>
+    <label class="assistant-consent"><input id="assistant-ai-consent" type="checkbox"> <span>Use a connected AI model when available. Only my instruction and column names may be sent—not CSV rows.</span></label>
+    <form id="assistant-form" class="assistant-form"><input id="assistant-input" type="text" maxlength="500" placeholder="e.g. Remove duplicates from this CSV" aria-label="Assistant message" autocomplete="off"><button id="assistant-send" class="button primary" type="submit" aria-label="Send message">➤</button></form>
+    <p id="assistant-mode" class="assistant-mode">Private guided suggestions are free. A connected generative AI model is optional and not required.</p>
+  </section>
 </div>
 </body>
 </html>

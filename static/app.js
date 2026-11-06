@@ -1,7 +1,33 @@
 'use strict';
 const byId = id => document.getElementById(id);
+// The dataset ID is a *reference*, not an access credential: every request still
+// requires the matching HttpOnly guest-session cookie on the server.
+const CURRENT_DATASET_KEY = 'datamendry.current-dataset.v1';
+function rememberDataset(id) {
+  try {
+    if (id) sessionStorage.setItem(CURRENT_DATASET_KEY, id);
+    else sessionStorage.removeItem(CURRENT_DATASET_KEY);
+  } catch {} // Blocked browser storage must not disable uploads.
+}
+async function restoreDataset() {
+  let id;
+  try { id = sessionStorage.getItem(CURRENT_DATASET_KEY); } catch { return; }
+  if (!id) return;
+  if (!/^[a-f0-9]{32}$/.test(id)) { rememberDataset(null); return; }
+  try {
+    const profile = await api(`/api/datasets/${id}/profile`);
+    state.id = id;
+    renderDataset(profile);
+    notice('Your existing dataset has been restored after the page refresh.', true);
+  } catch (error) {
+    rememberDataset(null);
+    // Expired data, lost session, or a restarted free Render instance cannot be
+    // recovered. Never fall back to another guest's data.
+    notice('Your previous temporary dataset is no longer available. Please upload it again.');
+  }
+}
 const state = { demoOnly: true, maxUploadMb: 0, id: null, profile: null, fileName: '', offset: 0, impact: null, simulatedRecipe: null, isBusy: false };
-const pageLabels = { overview: 'Overview', quality: 'Quality explorer', repair: 'Repair studio', rules: 'Rule checker' };
+const pageLabels = { overview: 'Overview', quality: 'Quality explorer', repair: 'Repair studio', rules: 'Rule checker', filter: 'Filter & export', guide: 'How it works' };
 const number = n => Number(n).toLocaleString();
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const scrollBehavior = () => prefersReducedMotion.matches ? 'auto' : 'smooth';
@@ -53,8 +79,9 @@ function renderDataset(profile) {
   const column = byId('rule-column'); column.replaceChildren(); for (const item of profile.columns) { const opt = el('option', '', item); opt.value = item; column.append(opt); }
   byId('impact-empty').hidden = false; byId('impact-results').hidden = true; byId('rule-results').replaceChildren(el('p', 'subtle', 'No checks run yet.'));
   loadPreview().catch(e => notice(e.message));
+  window.dispatchEvent(new CustomEvent('datamendry:dataset', { detail: { columns: profile.columns } }));
 }
-async function uploadFile(file) {
+async function uploadFile(file, options = {}) {
   if (!file) return;
   if (state.demoOnly) return notice('For everyone’s safety this public beta allows only the built-in sample dataset. Run DataMendry locally for your own files.');
   if (!file.name.toLowerCase().endsWith('.csv')) return notice('Choose a UTF-8 CSV file. Other formats are not supported in this build.');
@@ -66,9 +93,21 @@ async function uploadFile(file) {
     const result = await api('/api/datasets', { method: 'POST', body: form });
     const oldId = state.id;
     state.id = result.dataset_id;
+    rememberDataset(state.id);
     renderDataset(result.profile);
     if (oldId) api(`/api/datasets/${oldId}`, { method: 'DELETE' }).catch(() => {});
-    notice('Dataset imported successfully. Choose Quality explorer, Repair studio, or Rule checker to continue.', true);
+    // A cloud-saved original is independent of Render's temporary processing copy.
+    if (!options.fromCloud && window.DataMendrySaveOriginal) {
+      try {
+        const saved = await window.DataMendrySaveOriginal(file);
+        if (saved) notice('Dataset imported and saved to My Datasets. You can return after a server restart.', true);
+        else notice('Dataset imported temporarily. Sign in under My Datasets to save it across visits.', true);
+      } catch (error) {
+        notice(`Dataset imported for temporary processing, but your permanent copy was NOT saved: ${error.message}`);
+      }
+    } else {
+      notice('Dataset imported successfully. Choose Quality explorer, Repair studio, or Rule checker to continue.', true);
+    }
   } catch (e) { notice(e.message); } finally { busy(false); }
 }
 function recipe() { return { trim_whitespace: byId('opt-trim').checked, normalize_blanks: byId('opt-blanks').checked, remove_exact_duplicates: byId('opt-dedupe').checked }; }
@@ -113,7 +152,7 @@ async function runRule() {
 }
 async function removeDataset() {
   if (!state.id || !window.confirm('Delete this dataset from the server? This cannot be undone.')) return;
-  try { await api(`/api/datasets/${state.id}`, { method: 'DELETE' }); state.id = null; state.profile = null; state.impact = null; state.simulatedRecipe = null; byId('dataset-results').hidden = true; document.querySelectorAll('.requires-data').forEach(node => node.hidden = true); document.querySelectorAll('[data-empty]').forEach(node => node.hidden = false); showPage('overview'); notice('Dataset deleted from the server.', true); } catch (e) { notice(e.message); }
+  try { await api(`/api/datasets/${state.id}`, { method: 'DELETE' }); state.id = null; rememberDataset(null); state.profile = null; state.impact = null; state.simulatedRecipe = null; byId('dataset-results').hidden = true; document.querySelectorAll('.requires-data').forEach(node => node.hidden = true); document.querySelectorAll('[data-empty]').forEach(node => node.hidden = false); showPage('overview'); notice('Dataset deleted from the server.', true); } catch (e) { notice(e.message); }
 }
 async function configureDemoMode() {
   try {
@@ -134,7 +173,7 @@ async function configureDemoMode() {
     } else {
       input.disabled = false;
       uploadButton.hidden = false;
-      footer.textContent = `Private guest workspace · UTF-8 CSV up to ${config.max_upload_mb} MiB · Data expires after ${config.ttl_hours} hour(s)`;
+      footer.textContent = `CSV up to ${config.max_upload_mb} MiB · Guest processing expires after ${config.ttl_hours} hour(s) · Sign in to save originals in My Datasets`;
     }
   } catch (e) {
     byId('file-input').disabled = true;
@@ -143,16 +182,28 @@ async function configureDemoMode() {
   }
 }
 
+window.DataMendryImportSaved = file => uploadFile(file, {fromCloud: true});
+window.DataMendryDiscardCurrent = async () => {
+  const id = state.id;
+  if (!id) return true;
+  let deleted = true;
+  try { await api(`/api/datasets/${id}`, { method: 'DELETE' }); } catch { deleted = false; }
+  state.id = null; state.profile = null; state.impact = null; state.simulatedRecipe = null;
+  rememberDataset(null);
+  byId('dataset-results').hidden = true;
+  document.querySelectorAll('.requires-data').forEach(node => node.hidden = true);
+  document.querySelectorAll('[data-empty]').forEach(node => node.hidden = false);
+  showPage('overview');
+  window.dispatchEvent(new Event('datamendry:dataset'));
+  return deleted;
+};
+window.DataMendryUI = { current: () => ({ id: state.id, columns: state.profile?.columns || [] }), navigate: showPage, notice };
 function bind() {
   byId('file-input').disabled = true;
   document.querySelector('label[for="file-input"]').hidden = true;
-  configureDemoMode();
-  const footer = document.querySelector('footer');
-  if (footer) footer.textContent = 'DataMendry v0.4 · Privacy-first guest workspaces · Do not upload sensitive data';
-  const label = document.querySelector('.status-dot');
-  if (label) label.lastChild.textContent = ' Local engine · v0.4';
+  configureDemoMode().then(restoreDataset);
   document.querySelectorAll('.nav-link').forEach(b => b.addEventListener('click', () => showPage(b.dataset.page)));
-  byId('file-input').addEventListener('change', e => uploadFile(e.target.files?.[0]));
+  byId('file-input').addEventListener('change', e => { const file = e.target.files?.[0]; e.target.value = ''; uploadFile(file); });
   byId('demo-button').addEventListener('click', async () => {
     if (state.isBusy) return;
     busy(true, 'Loading the safe sample dataset…'); clearNotice();
@@ -160,6 +211,7 @@ function bind() {
       const result = await api('/api/datasets/demo', { method: 'POST' });
       const oldId = state.id;
       state.id = result.dataset_id;
+      rememberDataset(state.id);
       renderDataset(result.profile);
       if (oldId) api(`/api/datasets/${oldId}`, { method: 'DELETE' }).catch(() => {});
       notice('Sample dataset loaded. Explore quality checks, repair impact and rules.', true);

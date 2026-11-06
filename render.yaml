@@ -1,5 +1,5 @@
-# Public hobby DEMO ONLY. Guest sessions exist but public uploads stay disabled.
-# The filesystem is ephemeral on the free plan; do not process sensitive data.
+# Controlled public beta: CSV uploads remain available with guest session isolation.
+# The filesystem is ephemeral on the free plan; accept non-sensitive test files only.
 services:
   - type: web
     name: datamendry-demo

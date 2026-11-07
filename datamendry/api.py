@@ -304,9 +304,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/static/{filename}")
     def asset(filename: str):
-        if filename not in {"app.js", "app.css", "account.js", "experience.js", "experience.css", "verify.js", "analytics.js", "smart_analytics.js", "advanced_cleaning.js"}:
+        if filename not in {"app.js", "app.css", "account.js", "experience.js", "experience.css", "privacy.css", "verify.js", "analytics.js", "smart_analytics.js", "advanced_cleaning.js"}:
             raise HTTPException(404, "Asset not found")
         return FileResponse(PROJECT_DIR / "static" / filename)
+
+    @app.get("/privacy", include_in_schema=False)
+    def privacy_page():
+        return FileResponse(PROJECT_DIR / "static" / "privacy.html")
 
     @app.get("/verify")
     def verification_page():
